@@ -3,28 +3,36 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import scipy.ndimage
 from mpmath import mp, mpf
+from tqdm import tqdm  # pip install tqdm
 
-# High-precision setup
-mp.dps = 50
+# ─── Settings ───────────────────────────────────────────────
+mp.dps = 50  # High precision zoom
 
-# Constants
-WIDTH = HEIGHT = 300
-MAX_ITERS = 100
-ZOOM_SCALE = mpf("0.94")
-MIN_CONTRAST = 10.0
-CENTER_TOLERANCE = 0.1  # as a fraction of x_width
-PAN_SCALE = mpf("0.2")  # how fast to pan toward center
-MAX_STABILITY = 10      # stop zooming if no contrast gain for this many frames
+WIDTH = HEIGHT = 500  
+MAX_ITERS = 300
+PRELOAD_FRAMES = 1000
+FPS = 60
+INTERVAL = 1000 // FPS
 
-# Initial center and zoom
-x_center = mpf("-0.743643887037151")
-y_center = mpf("0.131825904205330")
-x_width = mpf("2.8")
+ZOOM_RATE = mpf("0.95")
+PAN_RATE = mpf("0.1")
+CENTER_TOLERANCE = 0.05
+MIN_CONTRAST = 5.0
+CONTRAST_TOL = 0.5
+STABILITY_THRESHOLD = 5
+
+X_CENTER = mpf("-0.743643887037151")
+Y_CENTER = mpf("0.131825904205330")
+X_WIDTH = mpf("3.5")
+# ────────────────────────────────────────────────────────────
 
 frames = []
 extents = []
-previous_contrast_score = 0
+x_center = X_CENTER
+y_center = Y_CENTER
+x_width = X_WIDTH
 stability_counter = 0
+previous_contrast_score = 0
 
 def mandelbrot(h, w, maxit, x_min, x_max, y_min, y_max):
     y, x = np.ogrid[float(y_min):float(y_max):h*1j, float(x_min):float(x_max):w*1j]
@@ -42,8 +50,12 @@ def mandelbrot(h, w, maxit, x_min, x_max, y_min, y_max):
 def get_contrast(data):
     sx = scipy.ndimage.sobel(data, axis=1)
     sy = scipy.ndimage.sobel(data, axis=0)
-    contrast = np.hypot(sx, sy)
-    return np.max(contrast), contrast
+    sobel = np.hypot(sx, sy)
+    entropy = np.abs(scipy.ndimage.gaussian_laplace(data, sigma=1.0))
+    yy, xx = np.meshgrid(np.linspace(-1, 1, data.shape[0]), np.linspace(-1, 1, data.shape[1]), indexing='ij')
+    radial = 1 - np.exp(-(xx**2 + yy**2) / 0.3)
+    interesting = 0.7 * sobel + 0.3 * entropy
+    return np.max(interesting), interesting * radial
 
 def generate_frame():
     global x_center, y_center, x_width
@@ -56,72 +68,66 @@ def generate_frame():
     y_max = y_center + y_height / 2
 
     data = mandelbrot(HEIGHT, WIDTH, MAX_ITERS, x_min, x_max, y_min, y_max)
-    contrast_score, contrast = get_contrast(data)
+    contrast_score, contrast_map = get_contrast(data)
 
     if contrast_score < MIN_CONTRAST:
-        print("Low contrast, skipping frame")
-        return
+        return None, None
 
-    threshold = np.percentile(contrast, 99.5)
-    mask = contrast > threshold
+    mask = contrast_map > np.percentile(contrast_map, 99.5)
     if not np.any(mask):
-        print("No significant contrast zone found")
-        return
+        return None, None
 
     y_idx, x_idx = np.nonzero(mask)
-    weights = contrast[y_idx, x_idx]
+    weights = contrast_map[y_idx, x_idx]
     cx = np.average(x_idx, weights=weights)
     cy = np.average(y_idx, weights=weights)
 
-    contrast_x = x_min + (x_max - x_min) * mpf(cx) / mpf(WIDTH)
-    contrast_y = y_min + (y_max - y_min) * mpf(cy) / mpf(HEIGHT)
+    target_x = x_min + (x_max - x_min) * mpf(cx) / WIDTH
+    target_y = y_min + (y_max - y_min) * mpf(cy) / HEIGHT
 
-    dx = contrast_x - x_center
-    dy = contrast_y - y_center
+    dx = target_x - x_center
+    dy = target_y - y_center
 
     if abs(dx) > CENTER_TOLERANCE * x_width or abs(dy) > CENTER_TOLERANCE * x_width:
-        x_center += dx * PAN_SCALE
-        y_center += dy * PAN_SCALE
-        print("Panning toward contrast zone")
+        x_center += dx * PAN_RATE
+        y_center += dy * PAN_RATE
     else:
-        if abs(contrast_score - previous_contrast_score) < 0.5:
+        if abs(contrast_score - previous_contrast_score) < CONTRAST_TOL:
             stability_counter += 1
-            if stability_counter > MAX_STABILITY:
-                print("No improvement in contrast — holding zoom")
-                return
+            if stability_counter > STABILITY_THRESHOLD:
+                return None, None
         else:
             stability_counter = 0
-
-        x_center = contrast_x
-        y_center = contrast_y
-        x_width *= ZOOM_SCALE
+        x_center = target_x
+        y_center = target_y
+        x_width *= ZOOM_RATE
         previous_contrast_score = contrast_score
-        print("Zooming in")
 
-    frames.append(data)
-    extents.append((float(x_min), float(x_max), float(y_min), float(y_max)))
+    return data, (float(x_min), float(x_max), float(y_min), float(y_max))
 
-# Bootstrap with at least one frame
-generate_frame()
-if not frames:
-    raise RuntimeError("Failed to generate initial frame. Check contrast threshold or bounds.")
-generate_frame()
 
-# Plot setup
+# ─── Preload Phase ───────────────────────────────────────────
+print(f" Preloading {PRELOAD_FRAMES} frames...")
+for _ in tqdm(range(PRELOAD_FRAMES)):
+    data, extent = generate_frame()
+    if data is not None:
+        frames.append(data)
+        extents.append(extent)
+    else:
+        continue
+print("Preloading done. Launching viewer...")
+
+# ─── Viewer ─────────────────────────────────────────────────
 fig, ax = plt.subplots()
 img = ax.imshow(frames[0], cmap='inferno', extent=extents[0])
 ax.axis('off')
-fig.suptitle("Mandelbrot Zoom – Stabilized Contrast Tracking", fontsize=12)
+fig.suptitle("Mandelbrot Zoom – Fast Preloaded", fontsize=14)
 
 def update(i):
-    idx = i
-    if idx >= len(frames) - 1:
-        generate_frame()
-
-    if idx < len(frames):
-        img.set_data(frames[idx])
-        img.set_extent(extents[idx])
+    idx = i % len(frames)
+    img.set_data(frames[idx])
+    img.set_extent(extents[idx])
     return [img]
 
-ani = FuncAnimation(fig, update, interval=30, blit=True)
+ani = FuncAnimation(fig, update, interval=INTERVAL, blit=True)
 plt.show()

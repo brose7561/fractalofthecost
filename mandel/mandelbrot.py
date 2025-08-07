@@ -1,16 +1,18 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-import scipy.ndimage
 from mpmath import mp, mpf
-from tqdm import tqdm  # pip install tqdm
+from tqdm import tqdm
+import torch
+
+# ─── Torch Device Setup ─────────────────────────────────────
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 # ─── Settings ───────────────────────────────────────────────
 mp.dps = 50  # High precision zoom
-
 WIDTH = HEIGHT = 500  
 MAX_ITERS = 300
-PRELOAD_FRAMES = 1000
+PRELOAD_FRAMES = 500
 FPS = 60
 INTERVAL = 1000 // FPS
 
@@ -24,7 +26,6 @@ STABILITY_THRESHOLD = 5
 X_CENTER = mpf("-0.743643887037151")
 Y_CENTER = mpf("0.131825904205330")
 X_WIDTH = mpf("3.5")
-# ────────────────────────────────────────────────────────────
 
 frames = []
 extents = []
@@ -34,29 +35,69 @@ x_width = X_WIDTH
 stability_counter = 0
 previous_contrast_score = 0
 
-def mandelbrot(h, w, maxit, x_min, x_max, y_min, y_max):
-    y, x = np.ogrid[float(y_min):float(y_max):h*1j, float(x_min):float(x_max):w*1j]
-    c = x + y * 1j
-    z = np.zeros_like(c)
-    divtime = np.full(c.shape, maxit, dtype=int)
+# ─── Mandelbrot Generator on GPU ────────────────────────────
+def mandelbrot_torch(h, w, maxit, x_min, x_max, y_min, y_max):
+    y = torch.linspace(float(y_min), float(y_max), h, device=device)
+    x = torch.linspace(float(x_min), float(x_max), w, device=device)
+    y, x = torch.meshgrid(y, x, indexing='ij')
+    c = x + 1j * y
+    z = torch.zeros_like(c)
+    divtime = torch.full(c.shape, maxit, dtype=torch.int32, device=device)
+
     for i in range(maxit):
         z = z**2 + c
-        diverge = np.abs(z) > 2
-        div_now = diverge & (divtime == maxit)
+        diverged = torch.abs(z) > 2
+        div_now = diverged & (divtime == maxit)
         divtime[div_now] = i
-        z[diverge] = 2
-    return divtime
+        z[diverged] = 2
 
-def get_contrast(data):
-    sx = scipy.ndimage.sobel(data, axis=1)
-    sy = scipy.ndimage.sobel(data, axis=0)
-    sobel = np.hypot(sx, sy)
-    entropy = np.abs(scipy.ndimage.gaussian_laplace(data, sigma=1.0))
-    yy, xx = np.meshgrid(np.linspace(-1, 1, data.shape[0]), np.linspace(-1, 1, data.shape[1]), indexing='ij')
-    radial = 1 - np.exp(-(xx**2 + yy**2) / 0.3)
-    interesting = 0.7 * sobel + 0.3 * entropy
-    return np.max(interesting), interesting * radial
+    return divtime.cpu().numpy()
 
+def gaussian_kernel(size=5, sigma=1.0):
+    coords = torch.arange(size, dtype=torch.float32) - size // 2
+    g = torch.exp(-(coords**2) / (2 * sigma**2))
+    g = g / g.sum()
+    return g.to(device)
+
+def blur_2d(data):
+    kernel = gaussian_kernel(5, 1.0)
+    data = data.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, H, W]
+    blurred = torch.nn.functional.conv2d(
+        torch.nn.functional.conv2d(data, kernel.view(1,1,1,-1), padding=(0,2)),
+        kernel.view(1,1,-1,1), padding=(2,0)
+    )
+    return blurred[0,0]
+
+
+# ─── Contrast Measure on GPU ────────────────────────────────
+def get_contrast_torch(data_np):
+    data = torch.tensor(data_np, dtype=torch.float32, device=device)
+
+    # Sobel operator
+    sobel_kernel_x = torch.tensor([[-1,0,1],[-2,0,2],[-1,0,1]], dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+    sobel_kernel_y = sobel_kernel_x.transpose(-1, -2)
+
+    data_unsq = data.unsqueeze(0).unsqueeze(0)
+    sx = torch.nn.functional.conv2d(data_unsq, sobel_kernel_x, padding=1)[0,0]
+    sy = torch.nn.functional.conv2d(data_unsq, sobel_kernel_y, padding=1)[0,0]
+    sobel = torch.sqrt(sx**2 + sy**2)
+
+    # Replace with manual blur
+    blurred = blur_2d(data)
+    laplace = torch.abs(data - blurred)
+
+    # Radial weighting
+    yy, xx = torch.meshgrid(torch.linspace(-1, 1, data.shape[0], device=device),
+                            torch.linspace(-1, 1, data.shape[1], device=device),
+                            indexing='ij')
+    radial = 1 - torch.exp(-(xx**2 + yy**2) / 0.3)
+
+    interesting = 0.7 * sobel + 0.3 * laplace
+    combined = (interesting * radial).cpu().numpy()
+    return np.max(combined), combined
+
+
+# ─── Frame Generator ────────────────────────────────────────
 def generate_frame():
     global x_center, y_center, x_width
     global previous_contrast_score, stability_counter
@@ -67,8 +108,8 @@ def generate_frame():
     y_min = y_center - y_height / 2
     y_max = y_center + y_height / 2
 
-    data = mandelbrot(HEIGHT, WIDTH, MAX_ITERS, x_min, x_max, y_min, y_max)
-    contrast_score, contrast_map = get_contrast(data)
+    data = mandelbrot_torch(HEIGHT, WIDTH, MAX_ITERS, x_min, x_max, y_min, y_max)
+    contrast_score, contrast_map = get_contrast_torch(data)
 
     if contrast_score < MIN_CONTRAST:
         return None, None
@@ -105,23 +146,20 @@ def generate_frame():
 
     return data, (float(x_min), float(x_max), float(y_min), float(y_max))
 
-
-# ─── Preload Phase ───────────────────────────────────────────
-print(f" Preloading {PRELOAD_FRAMES} frames...")
+# ─── Preload Frames ─────────────────────────────────────────
+print(f"Preloading {PRELOAD_FRAMES} frames with GPU acceleration...")
 for _ in tqdm(range(PRELOAD_FRAMES)):
     data, extent = generate_frame()
     if data is not None:
         frames.append(data)
         extents.append(extent)
-    else:
-        continue
-print("Preloading done. Launching viewer...")
+print("Done! Launching viewer...")
 
 # ─── Viewer ─────────────────────────────────────────────────
 fig, ax = plt.subplots()
 img = ax.imshow(frames[0], cmap='inferno', extent=extents[0])
 ax.axis('off')
-fig.suptitle("Mandelbrot Zoom – Fast Preloaded", fontsize=14)
+fig.suptitle("Mandelbrot Zoom – GPU Accelerated (Torch+MPS)", fontsize=14)
 
 def update(i):
     idx = i % len(frames)

@@ -19,7 +19,7 @@ from fractals import (
 # ——————————————————————————————————————————————
 # Configurable parameters
 # ——————————————————————————————————————————————
-FRACTAL = "newton"
+FRACTAL = "julia"
 # options: "mandelbrot","julia","burning_ship","newton",
 #          "cantor","takagi","sierpinski","feigenbaum"
 

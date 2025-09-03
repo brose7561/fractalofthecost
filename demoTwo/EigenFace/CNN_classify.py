@@ -1,0 +1,81 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.datasets import fetch_lfw_people
+from sklearn.model_selection import train_test_split
+import numpy as np
+
+# device setup
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+
+# load faces dataset
+lfw_people = fetch_lfw_people(min_faces_per_person=70, resize=0.4, data_home="data")
+X = lfw_people.images
+Y = lfw_people.target
+n_classes = len(lfw_people.target_names)
+
+print("X_min:", X.min(), "X_max:", X.max())
+
+# train/test split
+X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.25, random_state=42)
+
+# add channel dimension for CNN
+X_train = X_train[:, np.newaxis, :, :]
+X_test = X_test[:, np.newaxis, :, :]
+print("X_train shape:", X_train.shape)
+
+# torch tensors
+X_train = torch.tensor(X_train, dtype=torch.float32, device=device)
+X_test = torch.tensor(X_test, dtype=torch.float32, device=device)
+y_train = torch.tensor(y_train, dtype=torch.long, device=device)
+y_test = torch.tensor(y_test, dtype=torch.long, device=device)
+
+# CNN model with two conv layers 3x3, 32 filters each
+class CNNClassifier(nn.Module):
+    def __init__(self, n_classes):
+        super(CNNClassifier, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.relu = nn.ReLU()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(32 * (X_train.shape[2] // 2) * (X_train.shape[3] // 2), 128)
+        self.fc2 = nn.Linear(128, n_classes)
+
+    def forward(self, x):
+        x = self.relu(self.conv1(x))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = self.flatten(x)
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+model = CNNClassifier(n_classes).to(device)
+
+# optimiser and loss
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+# simple training loop
+epochs = 5
+batch_size = 32
+for epoch in range(epochs):
+    permutation = torch.randperm(X_train.size(0))
+    for i in range(0, X_train.size(0), batch_size):
+        indices = permutation[i:i+batch_size]
+        batch_x, batch_y = X_train[indices], y_train[indices]
+
+        optimizer.zero_grad()
+        outputs = model(batch_x)
+        loss = criterion(outputs, batch_y)
+        loss.backward()
+        optimizer.step()
+
+    print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}")
+
+# evaluation
+with torch.no_grad():
+    outputs = model(X_test)
+    _, preds = torch.max(outputs, 1)
+    acc = (preds == y_test).float().mean().item()
+    print("Test Accuracy:", acc)

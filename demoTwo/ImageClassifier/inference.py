@@ -3,11 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Button
+import torchvision.utils as vutils
 import random
 
-# --- same ResNet18 definition as before ----------------
+# --- same ResNet18 definition -------------------------
 class BasicBlock(nn.Module):
     expansion = 1
     def __init__(self, in_planes, planes, stride=1):
@@ -71,7 +70,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # reload trained model
 model = ResNet18().to(device)
-model.load_state_dict(torch.load("resnet18_cifar10.pth", map_location=device))
+model.load_state_dict(torch.load("resnet18_cifar10.pth", map_location=device, weights_only=True))
 model.eval()
 
 # dataset + transform (test set only)
@@ -83,32 +82,23 @@ transform_test = transforms.Compose([
 testset = torchvision.datasets.CIFAR10(root='cifar10', train=False,
                                        download=True, transform=transform_test)
 
-# class labels
 classes = testset.classes
 
-# random viewer logic
-fig, ax = plt.subplots()
-plt.subplots_adjust(bottom=0.2)  # leave space for button
-img_ax = ax.imshow(torchvision.transforms.ToPILImage()(testset[0][0]))
-title = ax.set_title("")
+# sample 16 random images
+indices = random.sample(range(len(testset)), 16)
+imgs, labels, preds = [], [], []
 
-def show_random(_=None):
-    idx = random.randint(0, len(testset)-1)
-    image, label = testset[idx]
-    with torch.no_grad():
-        out = model(image.unsqueeze(0).to(device))
+with torch.no_grad():
+    for idx in indices:
+        img, label = testset[idx]
+        out = model(img.unsqueeze(0).to(device))
         _, pred = torch.max(out, 1)
-    # update plot
-    img_ax.set_data(torchvision.transforms.ToPILImage()(image))
-    title.set_text(f"Pred: {classes[pred.item()]} | True: {classes[label]}")
-    fig.canvas.draw_idle()
+        imgs.append(img)
+        labels.append(label)
+        preds.append(pred.item())
+        print(f"Image {idx}: Pred={classes[pred.item()]}, True={classes[label]}")
 
-# add Next button
-axnext = plt.axes([0.4, 0.05, 0.2, 0.075])
-bnext = Button(axnext, 'Next')
-bnext.on_clicked(show_random)
-
-# show first random image
-show_random()
-
-plt.show()
+# save grid of images for later viewing
+grid = vutils.make_grid(imgs, nrow=4, normalize=True, scale_each=True)
+vutils.save_image(grid, "inference_results.png")
+print("Saved image grid to inference_results.png")

@@ -1,3 +1,4 @@
+```python
 # oasis_vae.py
 import os, glob, time, math, argparse, random
 import numpy as np
@@ -11,32 +12,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-# ─── Device ─────────────────────────────────────────────────────────────────────
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if not torch.cuda.is_available():
     print("Warning CUDA not found. Using CPU")
 
-# ─── Args ───────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
 parser.add_argument("--data_root", type=str, default="/home/groups/comp3710/OASIS")
 parser.add_argument("--img_size", type=int, default=128)
 parser.add_argument("--batch_size", type=int, default=128)
 parser.add_argument("--epochs", type=int, default=35)
 parser.add_argument("--lr", type=float, default=1e-3)
-parser.add_argument("--latent_dim", type=int, default=2)  # 2D latent to visualise manifold directly
+parser.add_argument("--latent_dim", type=int, default=2)
 parser.add_argument("--num_workers", type=int, default=4)
-parser.add_argument("--augment", action="store_true")     # optional weak aug for regularisation
+parser.add_argument("--augment", action="store_true")
 args = parser.parse_args([]) if "__file__" not in globals() else parser.parse_args()
 
-# ─── Folders (use the non-seg sets for the VAE images) ──────────────────────────
 train_dir = os.path.join(args.data_root, "keras_png_slices_train")
 val_dir   = os.path.join(args.data_root, "keras_png_slices_validate")
 test_dir  = os.path.join(args.data_root, "keras_png_slices_test")
 os.makedirs("vae_outputs", exist_ok=True)
 
-# ─── Dataset ────────────────────────────────────────────────────────────────────
 class PNGFolderDataset(Dataset):
-    # Loads all PNG/JPG recursively under a root; returns single-channel tensors in [0,1]
     def __init__(self, root, img_size=128, train_mode=False, augment=False):
         self.paths = sorted(
             glob.glob(os.path.join(root, "**", "*.png"), recursive=True)
@@ -53,20 +49,19 @@ class PNGFolderDataset(Dataset):
         return len(self.paths)
 
     def _load_image(self, path):
-        img = Image.open(path).convert("L")  # grayscale
+        img = Image.open(path).convert("L")
         img = img.resize((self.img_size, self.img_size), Image.BILINEAR)
         if self.train_mode and self.augment:
             if random.random() < 0.5:
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
-        arr = np.array(img, dtype=np.float32) / 255.0  # [0,1]
-        tensor = torch.from_numpy(arr)[None, ...]      # [1,H,W]
+        arr = np.array(img, dtype=np.float32) / 255.0
+        tensor = torch.from_numpy(arr)[None, ...]
         return tensor
 
     def __getitem__(self, idx):
         x = self._load_image(self.paths[idx])
         return x
 
-# ─── Data ───────────────────────────────────────────────────────────────────────
 train_set = PNGFolderDataset(train_dir, img_size=args.img_size, train_mode=True,  augment=args.augment)
 val_set   = PNGFolderDataset(val_dir,   img_size=args.img_size, train_mode=False, augment=False)
 test_set  = PNGFolderDataset(test_dir,  img_size=args.img_size, train_mode=False, augment=False)
@@ -76,34 +71,28 @@ train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True,  
 val_loader   = DataLoader(val_set,   batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=pin)
 test_loader  = DataLoader(test_set,  batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=pin)
 
-# ─── Model (Conv VAE) ───────────────────────────────────────────────────────────
 class ConvVAE(nn.Module):
-    # Encoder downsamples to a compact feature map; produces μ, logσ²
-    # Decoder upsamples from latent to reconstruct the image
     def __init__(self, img_size=128, latent_dim=2):
         super().__init__()
         c = 32
         self.enc = nn.Sequential(
-            nn.Conv2d(1,   c, 4, 2, 1), nn.ReLU(True),     # 128 -> 64
-            nn.Conv2d(c,  c*2, 4, 2, 1), nn.ReLU(True),    # 64  -> 32
-            nn.Conv2d(c*2,c*4, 4, 2, 1), nn.ReLU(True),    # 32  -> 16
-            nn.Conv2d(c*4,c*8, 4, 2, 1), nn.ReLU(True),    # 16  -> 8
+            nn.Conv2d(1,   c, 4, 2, 1), nn.ReLU(True),
+            nn.Conv2d(c,  c*2, 4, 2, 1), nn.ReLU(True),
+            nn.Conv2d(c*2,c*4, 4, 2, 1), nn.ReLU(True),
+            nn.Conv2d(c*4,c*8, 4, 2, 1), nn.ReLU(True),
         )
-        feat_spatial = img_size // 16  # 128->8
+        feat_spatial = img_size // 16
         self.feat_h = self.feat_w = feat_spatial
         self.feat_c = c*8
         enc_out = self.feat_c * self.feat_h * self.feat_w
-
         self.fc_mu     = nn.Linear(enc_out, latent_dim)
         self.fc_logvar = nn.Linear(enc_out, latent_dim)
-
         self.fc_dec = nn.Linear(latent_dim, enc_out)
         self.dec = nn.Sequential(
-            nn.ConvTranspose2d(c*8, c*4, 4, 2, 1), nn.ReLU(True),  # 8 -> 16
-            nn.ConvTranspose2d(c*4, c*2, 4, 2, 1), nn.ReLU(True),  # 16-> 32
-            nn.ConvTranspose2d(c*2, c,   4, 2, 1), nn.ReLU(True),  # 32-> 64
-            nn.ConvTranspose2d(c,   1,   4, 2, 1),                 # 64->128
-            nn.Sigmoid()                                           # output in [0,1]
+            nn.ConvTranspose2d(c*8, c*4, 4, 2, 1), nn.ReLU(True),
+            nn.ConvTranspose2d(c*4, c*2, 4, 2, 1), nn.ReLU(True),
+            nn.ConvTranspose2d(c*2, c,   4, 2, 1), nn.ReLU(True),
+            nn.ConvTranspose2d(c,   1,   4, 2, 1)
         )
 
     def encode(self, x):
@@ -130,28 +119,24 @@ class ConvVAE(nn.Module):
         x_hat = self.decode(z)
         return x_hat, mu, logvar
 
-# ─── Build Model ────────────────────────────────────────────────────────────────
 model = ConvVAE(img_size=args.img_size, latent_dim=args.latent_dim).to(device)
 if device.type == "cuda":
     print(torch.cuda.get_device_name(0))
 print("Model No. of Parameters:", sum(p.numel() for p in model.parameters()))
 print(model)
 
-# ─── Loss + Optim ───────────────────────────────────────────────────────────────
-# Reconstruction term uses BCE on [0,1] pixels; KL term regularises latent to N(0, I)
 def vae_loss(x_hat, x, mu, logvar):
-    bce = F.binary_cross_entropy(x_hat, x, reduction="mean")
+    bce = F.binary_cross_entropy_with_logits(x_hat, x, reduction="mean")
     kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
     return bce + kld, bce, kld
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 scaler = torch.cuda.amp.GradScaler(enabled=(device.type=="cuda"))
 
-# ─── Utils: Visualisation ───────────────────────────────────────────────────────
 def save_reconstructions(epoch, x, x_hat, max_n=16, fname_prefix="vae_outputs/recon"):
     n = min(x.size(0), max_n)
     x = x[:n].detach().cpu().numpy()
-    x_hat = x_hat[:n].detach().cpu().numpy()
+    x_hat = torch.sigmoid(x_hat[:n]).detach().cpu().numpy()
     fig, axes = plt.subplots(2, n, figsize=(n*1.2, 2.4))
     for i in range(n):
         axes[0, i].imshow(x[i,0], cmap="gray", vmin=0, vmax=1)
@@ -172,7 +157,7 @@ def save_manifold_grid(decoder, latent_dim=2, img_size=128, grid_size=20, span=3
             row = []
             for xi in lin:
                 z = torch.tensor([[xi, yi]], dtype=torch.float32, device=device)
-                x_hat = decoder(z).cpu().numpy()[0,0]
+                x_hat = torch.sigmoid(decoder(z)).cpu().numpy()[0,0]
                 row.append(x_hat)
             grid.append(np.concatenate(row, axis=1))
         full = np.concatenate(grid, axis=0)
@@ -183,7 +168,6 @@ def save_manifold_grid(decoder, latent_dim=2, img_size=128, grid_size=20, span=3
         plt.savefig(fname, dpi=200)
         plt.close()
 
-# ─── Training ───────────────────────────────────────────────────────────────────
 print("> Training")
 start = time.time()
 best_val = float("inf")
@@ -242,7 +226,6 @@ for epoch in range(1, args.epochs + 1):
 end = time.time()
 print("Training took " + str(end - start) + " secs or " + str((end - start)/60) + " mins in total")
 
-# ─── Testing ────────────────────────────────────────────────────────────────────
 print("> Testing")
 start = time.time()
 model.eval()
@@ -264,11 +247,10 @@ print(f"Test: total={test_loss:.4f} bce={test_bce:.4f} kld={test_kld:.4f}")
 end = time.time()
 print("Testing took " + str(end - start) + " secs or " + str((end - start)/60) + " mins in total")
 
-# ─── Save Final Model ───────────────────────────────────────────────────────────
 torch.save(model.state_dict(), "vae_outputs/vae_oasis_final.pth")
 print("Model saved to vae_outputs/vae_oasis_final.pth")
 
-# ─── Visualise Latent Manifold (2D latent) ──────────────────────────────────────
 save_manifold_grid(model.decode, latent_dim=args.latent_dim, img_size=args.img_size, grid_size=20, span=3.0,
                    fname="vae_outputs/manifold_grid.png")
 print("Saved manifold grid to vae_outputs/manifold_grid.png")
+```

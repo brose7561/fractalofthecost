@@ -1,0 +1,3 @@
+srun -p a100-test --gres=shard:1 --time=20:00 --pty bash
+
+

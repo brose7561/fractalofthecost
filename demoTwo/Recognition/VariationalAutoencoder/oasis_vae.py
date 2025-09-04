@@ -252,4 +252,6 @@ print("Model saved to vae_outputs/vae_oasis_final.pth")
 save_manifold_grid(model.decode, latent_dim=args.latent_dim, img_size=args.img_size, grid_size=20, span=3.0,
                    fname="vae_outputs/manifold_grid.png")
 print("Saved manifold grid to vae_outputs/manifold_grid.png")
-```
+
+
+

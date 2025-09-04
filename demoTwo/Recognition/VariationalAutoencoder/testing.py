@@ -5,7 +5,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils as vutils
 import matplotlib.pyplot as plt
 
@@ -154,7 +154,7 @@ class VAE(nn.Module):
 
 def loss_fn(x, xhat, mu, logvar, beta, capacity=0.0, gamma=1.0):
     rec = F.mse_loss(xhat, x, reduction="mean")
-    kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
     total = rec + beta * gamma * torch.abs(kld - capacity)
     return total, rec, kld
 
@@ -200,7 +200,7 @@ def encode_dataset(model, loader, device):
     with torch.no_grad():
         for x in loader:
             x = x.to(device)
-            mu, logvar = model.encode(x)
+            mu, _ = model.encode(x)
             zs.append(mu.cpu())
     return torch.cat(zs, dim=0).numpy()
 
@@ -213,9 +213,22 @@ def save_latent_scatter(z, out_path):
     plt.savefig(out_path, dpi=200)
     plt.close()
 
+def recon_errors(model, loader, device):
+    model.eval()
+    errs = []
+    with torch.no_grad():
+        for x in loader:
+            x = x.to(device)
+            xhat, _, _ = model(x)
+            e = (xhat - x).pow(2).flatten(1).mean(dim=1).detach().cpu().numpy()
+            errs.append(e)
+    return np.concatenate(errs, axis=0)
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_root", default="/home/groups/comp3710/OASIS/keras_png_slices_train", type=str)
+    p.add_argument("--train_root", default="/home/groups/comp3710/OASIS/keras_png_slices_train", type=str)
+    p.add_argument("--val_root", default="/home/groups/comp3710/OASIS/keras_png_slices_validate", type=str)
+    p.add_argument("--test_root", default="/home/groups/comp3710/OASIS/keras_png_slices_test", type=str)
     p.add_argument("--img_size", default=128, type=int)
     p.add_argument("--batch_size", default=128, type=int)
     p.add_argument("--epochs", default=35, type=int)
@@ -226,11 +239,11 @@ def main():
     p.add_argument("--seed", default=42, type=int)
     p.add_argument("--slice_stride", default=4, type=int)
     p.add_argument("--max_slices_per_vol", default=None, type=int)
-    p.add_argument("--val_ratio", default=0.1, type=float)
     p.add_argument("--outdir", default="oasis_vae_runs", type=str)
     p.add_argument("--kl_warmup", default=10, type=int)
     p.add_argument("--kl_target", default=0.5, type=float)
     p.add_argument("--kl_gamma", default=1.0, type=float)
+    p.add_argument("--acc_threshold_pct", default=95.0, type=float)
     args = p.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -238,13 +251,8 @@ def main():
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    dataset = OasisMRIDataset(
-        args.data_root, img_size=args.img_size, slice_stride=args.slice_stride, max_slices_per_vol=args.max_slices_per_vol
-    )
-    n_val = max(1, int(len(dataset) * args.val_ratio))
-    n_train = len(dataset) - n_val
-    g = torch.Generator().manual_seed(args.seed)
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=g)
+    train_set = OasisMRIDataset(args.train_root, img_size=args.img_size, slice_stride=args.slice_stride, max_slices_per_vol=args.max_slices_per_vol)
+    val_set = OasisMRIDataset(args.val_root, img_size=args.img_size, slice_stride=args.slice_stride, max_slices_per_vol=args.max_slices_per_vol)
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True)
@@ -252,13 +260,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = VAE(z_dim=args.z_dim, img_size=args.img_size).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    scaler = torch.amp.GradScaler(device_type="cuda", enabled=(device.type == "cuda"))
 
     best_loss = float("inf")
     start = time.time()
     for epoch in range(1, args.epochs + 1):
         cap = min(args.kl_target, args.kl_target * epoch / max(1, args.kl_warmup))
-
         model.train()
         run_tot = 0.0
         run_rec = 0.0
@@ -266,7 +273,7 @@ def main():
         for x in train_loader:
             x = x.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+            with torch.amp.autocast(device_type="cuda", enabled=(device.type == "cuda")):
                 xhat, mu, logvar = model(x)
                 loss, rec, kld = loss_fn(x, xhat, mu, logvar, args.beta, capacity=cap, gamma=args.kl_gamma)
             scaler.scale(loss).backward()
@@ -288,8 +295,9 @@ def main():
         with torch.no_grad():
             for x in val_loader:
                 x = x.to(device, non_blocking=True)
-                xhat, mu, logvar = model(x)
-                loss, rec, kld = loss_fn(x, xhat, mu, logvar, args.beta, capacity=cap, gamma=args.kl_gamma)
+                with torch.amp.autocast(device_type="cuda", enabled=(device.type == "cuda")):
+                    xhat, mu, logvar = model(x)
+                    loss, rec, kld = loss_fn(x, xhat, mu, logvar, args.beta, capacity=cap, gamma=args.kl_gamma)
                 bs = x.size(0)
                 val_tot += loss.item() * bs
                 val_rec += rec.item() * bs
@@ -312,12 +320,20 @@ def main():
     elapsed = time.time() - start
     print(f"done {elapsed:.1f}s")
 
-    model.load_state_dict(torch.load(os.path.join(args.outdir, "oasis_vae.pt"), map_location=device))
+    state = torch.load(os.path.join(args.outdir, "oasis_vae.pt"), map_location=device, weights_only=True)
+    model.load_state_dict(state)
     save_reconstructions(model, val_loader, device, os.path.join(args.outdir, "recon_best.png"))
     save_prior_samples(model, device, os.path.join(args.outdir, "samples_best.png"), z_dim=args.z_dim)
     save_manifold_grid(model, device, os.path.join(args.outdir, "manifold_grid.png"), z_dim=args.z_dim, grid_size=20, lim=3.0)
     z = encode_dataset(model, val_loader, device)
     save_latent_scatter(z, os.path.join(args.outdir, "latent_scatter.png"))
+
+    train_errs = recon_errors(model, train_loader, device)
+    val_errs = recon_errors(model, val_loader, device)
+    thr = float(np.percentile(train_errs, args.acc_threshold_pct))
+    acc = float((val_errs <= thr).mean() * 100.0)
+    print(f"Validation reconstruction-pass accuracy: {acc:.2f}% @ threshold={thr:.6f} (perc {args.acc_threshold_pct:.1f})")
+    print(f"Mean train MSE: {train_errs.mean():.6f} | Mean val MSE: {val_errs.mean():.6f}")
 
 if __name__ == "__main__":
     main()

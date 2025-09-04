@@ -212,8 +212,6 @@ print("Training took " + str(elapsed) + " secs or " +
       str(elapsed/60) + " mins in total")
 
 
-
-
 # test loop
 print("> Testing")
 start = time.time()
@@ -241,3 +239,10 @@ end = time.time()
 elapsed = end - start
 print("Testing took " + str(elapsed) + " secs or " +
       str(elapsed/60) + " mins in total")
+
+
+# save the model 
+
+torch.save(model.state_dict(), "resnet18_cifar10.pth")
+print("Model saved to resnet18_cifar10.pth")
+

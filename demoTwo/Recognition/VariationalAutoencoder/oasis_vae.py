@@ -252,7 +252,8 @@ def vae_loss(x_hat, x, mu, logvar):
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 # Mixed precision (AMP): new API to avoid deprecation warnings
-scaler = torch.amp.GradScaler(device_type="cuda", enabled=(device.type == "cuda"))
+scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
 
 
 

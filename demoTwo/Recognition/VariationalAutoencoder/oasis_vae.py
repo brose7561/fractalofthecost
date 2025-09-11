@@ -46,13 +46,13 @@ parser.add_argument("--img_size", type=int, default=128)
 # Batch size per step
 parser.add_argument("--batch_size", type=int, default=128)
 # Number of training epochs
-parser.add_argument("--epochs", type=int, default=35)
+parser.add_argument("--epochs", type=int, default=15)
 #warm up 
-parser.add_argument("--warmup_epochs", type=int, default=10)
+parser.add_argument("--warmup_epochs", type=int, default=5)
 # Adam learning rate
 parser.add_argument("--lr", type=float, default=1e-3)
 # Size of the latent vector (z). Keep 2 to visualize the manifold grid.
-parser.add_argument("--latent_dim", type=int, default=2)
+parser.add_argument("--latent_dim", type=int, default=64)
 # DataLoader workers: on HPCs, keep this low (often 0–2). Default 1 to avoid warnings.
 parser.add_argument("--num_workers", type=int, default=1)
 # Simple augmentation (horizontal flip). Applies only to train set when enabled.
@@ -258,7 +258,7 @@ scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
 
 
-
+"""
 def save_manifold_grid(model, loader, device, fname="vae_outputs/latent_umap.png", n_neighbors=15, min_dist=0.1, max_points=None, random_state=42):
     model.eval()
     zs = []
@@ -279,6 +279,26 @@ def save_manifold_grid(model, loader, device, fname="vae_outputs/latent_umap.png
     plt.tight_layout()
     plt.savefig(fname, dpi=200)
     plt.close()
+"""
+
+def save_manifold_grid(model, loader, device, fname="vae_outputs/latent.npy", n_neighbors=15, min_dist=0.1, max_points=None, random_state=42):
+    model.eval()
+    zs = []
+    with torch.no_grad():
+        for x in loader:
+            x = x.to(device, non_blocking=True)
+            mu, _ = model.encode(x)
+            zs.append(mu.cpu())
+    z = torch.cat(zs, dim=0).numpy()
+
+    # Optionally subsample
+    if max_points is not None and z.shape[0] > max_points:
+        idx = np.random.RandomState(random_state).choice(z.shape[0], size=max_points, replace=False)
+        z = z[idx]
+
+    # Save latent vectors
+    np.save(fname.replace(".png", ".npy"), z)
+    print(f"Saved latent vectors to {fname.replace('.png', '.npy')} with shape {z.shape}")
 
 
 # -----------------------------

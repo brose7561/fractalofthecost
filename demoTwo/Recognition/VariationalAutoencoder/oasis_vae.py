@@ -52,7 +52,7 @@ parser.add_argument("--warmup_epochs", type=int, default=10)
 # Adam learning rate
 parser.add_argument("--lr", type=float, default=1e-3)
 # Size of the latent vector (z). Keep 2 to visualize the manifold grid.
-parser.add_argument("--latent_dim", type=int, default=64)
+parser.add_argument("--latent_dim", type=int, default=2)
 # DataLoader workers: on HPCs, keep this low (often 0–2). Default 1 to avoid warnings.
 parser.add_argument("--num_workers", type=int, default=1)
 # Simple augmentation (horizontal flip). Applies only to train set when enabled.

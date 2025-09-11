@@ -47,6 +47,8 @@ parser.add_argument("--img_size", type=int, default=128)
 parser.add_argument("--batch_size", type=int, default=128)
 # Number of training epochs
 parser.add_argument("--epochs", type=int, default=35)
+#warm up 
+parser.add_argument("--warmup_epochs", type=int, default=10)
 # Adam learning rate
 parser.add_argument("--lr", type=float, default=1e-3)
 # Size of the latent vector (z). Keep 2 to visualize the manifold grid.
@@ -241,12 +243,11 @@ print(model)
 #  - Reconstruction: BCEWithLogits between logits and targets in [0,1]
 #  - KL: encourage q(z|x) ~ N(0,I) for a smooth, generative latent space
 # -----------------------------
-def vae_loss(x_hat, x, mu, logvar):
-    # Reconstruction term: we pass raw logits and let BCEWithLogits apply sigmoid internally
-    bce = F.binary_cross_entropy_with_logits(x_hat, x, reduction="mean")
-    # KL term: analytical KL between q(z|x) = N(μ,σ²) and p(z) = N(0, I)
-    kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-    return bce + kld, bce, kld
+def vae_loss(x_hat, x, mu, logvar, beta=1.0):
+    b = x.size(0)
+    bce = F.binary_cross_entropy_with_logits(x_hat, x, reduction="sum") / b
+    kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / b
+    return bce + beta * kld, bce, kld
 
 # Optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -294,6 +295,7 @@ fixed_test_batch = fixed_test_batch.to(device)
 for epoch in range(1, args.epochs + 1):
     model.train()
     running_loss, running_bce, running_kld = 0.0, 0.0, 0.0
+    beta = min(epoch / args.warmup_epochs, 1.0)
 
     for x in train_loader:
         x = x.to(device, non_blocking=True)
@@ -302,7 +304,7 @@ for epoch in range(1, args.epochs + 1):
         # AMP autocast context with the new API (prevents the deprecation warning)
         with torch.amp.autocast(device_type="cuda", enabled=(device.type == "cuda")):
             x_hat, mu, logvar = model(x)
-            loss, bce, kld = vae_loss(x_hat, x, mu, logvar)
+            loss, bce, kld = vae_loss(x_hat, x, mu, logvar, beta=beta)
 
         # Scale, backward, and step with AMP
         scaler.scale(loss).backward()
@@ -326,7 +328,7 @@ for epoch in range(1, args.epochs + 1):
         for x in val_loader:
             x = x.to(device, non_blocking=True)
             x_hat, mu, logvar = model(x)
-            loss, bce, kld = vae_loss(x_hat, x, mu, logvar)
+            loss, bce, kld = vae_loss(x_hat, x, mu, logvar, beta=1.0)
             val_loss += loss.item() * x.size(0)
             val_bce  += bce.item()  * x.size(0)
             val_kld  += kld.item()  * x.size(0)
@@ -364,7 +366,7 @@ with torch.no_grad():
     for x in test_loader:
         x = x.to(device, non_blocking=True)
         x_hat, mu, logvar = model(x)
-        loss, bce, kld = vae_loss(x_hat, x, mu, logvar)
+        loss, bce, kld = vae_loss(x_hat, x, mu, logvar, beta=1.0)
         test_loss += loss.item() * x.size(0)
         test_bce  += bce.item()  * x.size(0)
         test_kld  += kld.item()  * x.size(0)
@@ -383,4 +385,5 @@ print("Model saved to vae_outputs/vae_oasis_final.pth")
 
 # Save a 2-D latent manifold grid if latent_dim=2
 save_manifold_grid(model, test_loader, device, fname="vae_outputs/latent_umap.png")
-print("Saved manifold grid to vae_outputs/manifold_grid.png")
+print("Saved manifold grid to vae_outputs/latent_umap.png")
+

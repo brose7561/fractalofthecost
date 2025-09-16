@@ -3,7 +3,7 @@
 
 # Rangpur at Home:
 
-ssh s4743787@ssh.labs.eait.uq.edu.au
+ssh s4743787@remote.labs.eait.uq.edu.au
 
 ssh s4743787@rangpur.compute.eait.uq.edu.au
 

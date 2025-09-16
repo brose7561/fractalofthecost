@@ -1,9 +1,4 @@
-# oasis_vae.py
-# A compact, fully-commented Variational Autoencoder (VAE) for OASIS PNG slices.
-# This version:
-# - Keeps the original architecture and BCE-with-logits objective you were using.
-# - Fixes the AMP deprecation warnings by switching from torch.cuda.amp.* to torch.amp.*.
-# - Explains, line-by-line, what each part does so you can learn the flow.
+
 
 import os, glob, time, math, argparse, random
 import numpy as np
@@ -22,8 +17,6 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 import umap
-
-
 import shutil
 
 
@@ -134,7 +127,6 @@ class PNGFolderDataset(Dataset):
         return len(self.paths)
 
     def augment(self, img):
-        # Explicit hook for augmentation
         return self.aug_tf(img)
 
     def _load_image(self, path):

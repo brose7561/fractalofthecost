@@ -22,7 +22,6 @@ conda activate pytorch-env
 # Navigate to project directory
 # -----------------------------
 
-cd $HOME/projects/demoTwo/Recognition/Unet
 
 # -----------------------------
 # Run training

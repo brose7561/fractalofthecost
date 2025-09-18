@@ -33,6 +33,8 @@ class SegmentationDataset(Dataset):
             if f.lower().endswith(".png")
         ])
 
+        self.mask_paths = []
+        
         for img_path in self.image_paths:
             base = os.path.basename(img_path)
             stem = base[:-4] if base.endswith(".png") else base

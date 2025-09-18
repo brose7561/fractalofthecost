@@ -34,7 +34,7 @@ class SegmentationDataset(Dataset):
         ])
 
         self.mask_paths = []
-        
+
         for img_path in self.image_paths:
             base = os.path.basename(img_path)
             stem = base[:-4] if base.endswith(".png") else base
@@ -72,12 +72,15 @@ class SegmentationDataset(Dataset):
         return img
 
     def _load_mask(self, p: str):
-        # Expect mask PNG with integer labels [0..C-1]
         mask = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
         if mask is None:
             raise FileNotFoundError(f"Could not read mask: {p}")
         mask = cv2.resize(mask, self.resize, interpolation=cv2.INTER_NEAREST)
+
+        # Normalize to class indices [0..3]
+        mask = mask // (256 // 4)   # e.g., 0–63 -> 0, 64–127 -> 1, etc.
         return mask
+
 
     def __getitem__(self, idx: int):
         img_path = self.image_paths[idx]

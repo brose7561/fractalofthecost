@@ -33,24 +33,24 @@ class SegmentationDataset(Dataset):
             if f.lower().endswith(".png")
         ])
 
-        self.mask_paths = []
         for img_path in self.image_paths:
             base = os.path.basename(img_path)
             stem = base[:-4] if base.endswith(".png") else base
 
-            # Try .nii.png mask first
-            candidate = os.path.join(self.mask_dir, stem + ".nii.png")
-            if os.path.exists(candidate):
-                self.mask_paths.append(candidate)
-                continue
-
-            # Try plain .png mask
+            # Try exact same filename
             candidate = os.path.join(self.mask_dir, base)
             if os.path.exists(candidate):
                 self.mask_paths.append(candidate)
                 continue
 
+            # Try replacing "case" with "seg"
+            candidate = os.path.join(self.mask_dir, base.replace("case", "seg"))
+            if os.path.exists(candidate):
+                self.mask_paths.append(candidate)
+                continue
+
             raise FileNotFoundError(f"No mask found for image {img_path}")
+
 
         assert len(self.image_paths) == len(self.mask_paths) and len(self.image_paths) > 0, \
             f"No matching image/mask pairs found in {image_dir} and {mask_dir}."

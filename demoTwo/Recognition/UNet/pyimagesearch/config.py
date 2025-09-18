@@ -36,7 +36,7 @@ DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 PIN_MEMORY = True if DEVICE == "cuda" else False
 
 INIT_LR   = float(os.environ.get("OASIS_LR", "1e-3"))
-NUM_EPOCHS = int(os.environ.get("OASIS_EPOCHS", "50"))
+NUM_EPOCHS = int(os.environ.get("OASIS_EPOCHS", "10"))
 BATCH_SIZE = int(os.environ.get("OASIS_BATCH", "16"))
 
 # Loss mixing: total = CE + (DICE_WEIGHT * (1 - mean_dice))

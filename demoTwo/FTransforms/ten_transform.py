@@ -16,7 +16,7 @@ DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 DTYPE_REAL = torch.float32   
 DTYPE_COMPLEX = torch.complex64
 
-# this is super redundant but tecnically uses tensors... not sure why. 
+# tecnically uses tensors... not sure why. 
 def torch_square_wave(t):
     t = torch.as_tensor(t, dtype=DTYPE_REAL, device=DEVICE)
     return torch.sign(torch.sin(2.0 * torch.pi * f0 * t)).cpu().numpy()
@@ -45,7 +45,6 @@ def np_square_wave_fourier(t, N):
 
 # Create the time vector
 # np.linspace generates evenly spaced numbers over a specified interval.
-# We use endpoint=False because the interval is periodic.
 t = np.linspace(0.0, T, N, endpoint=False)
 
 # generate original square wave

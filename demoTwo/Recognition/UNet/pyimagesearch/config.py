@@ -6,15 +6,19 @@ import torch
 
 # ---- Data roots (customise if needed) -----------------------------------------
 # Rangpur cluster OASIS path and split folders (images + masks)
+# Base dataset directory (override with $OASIS_ROOT if set in environment)
 DATA_ROOT = os.environ.get("OASIS_ROOT", "/home/groups/comp3710/OASIS")
 
+# Directories for images
 IMG_TRAIN_DIR = os.path.join(DATA_ROOT, "keras_png_slices_train")
 IMG_VAL_DIR   = os.path.join(DATA_ROOT, "keras_png_slices_validate")
 IMG_TEST_DIR  = os.path.join(DATA_ROOT, "keras_png_slices_test")
 
+# Corresponding segmentation masks
 MASK_TRAIN_DIR = os.path.join(DATA_ROOT, "keras_png_slices_seg_train")
 MASK_VAL_DIR   = os.path.join(DATA_ROOT, "keras_png_slices_seg_validate")
 MASK_TEST_DIR  = os.path.join(DATA_ROOT, "keras_png_slices_seg_test")
+
 
 # ---- Model / task config ------------------------------------------------------
 # OASIS preprocessed commonly has 4 classes (background, GM, WM, CSF),
